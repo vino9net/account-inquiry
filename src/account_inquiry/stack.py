@@ -56,6 +56,17 @@ class AccountInquiryStack(Stack):
         ingest_fn = self._ingest_lambda(table, stream)
         api = self._appsync_api(table)
 
+        if settings.ci_principal_arn:
+            # An existing (not stack-managed) IAM user/role — e.g. the CI credential
+            # GitHub Actions deploys with — imported by ARN so CDK can attach an inline
+            # policy to it. See grant_query() below for why this is needed at all:
+            # AppSync's IAM auth checks the caller's own identity policy, not a
+            # resource policy on the API.
+            ci_principal = iam.User.from_user_arn(
+                self, "CiTestPrincipal", settings.ci_principal_arn
+            )
+            self.grant_query(ci_principal)
+
         CfnOutput(self, "AccountsTableName", value=table.table_name)
         CfnOutput(self, "TransfersStreamName", value=stream.stream_name)
         CfnOutput(self, "AccountInquiryApiUrl", value=api.graphql_url)

@@ -79,7 +79,16 @@ tests/
     test_record.py   wire format round-trip
     test_handler.py  ingestion logic against moto-mocked DynamoDB
     test_stack.py    CDK Template assertions (resource shape, removal policy per env)
-  integration/       not yet implemented — see "Integration tests" below
+  integration/       against a real deployed stack — see "Integration tests" below
+    conftest.py      stack-output lookup + api_auth/graphql_query/ddb_table/kinesis_client fixtures
+    test_smoke.py           read-only, marked `smoke` — safe against the shared staging stack
+    test_transfer_pipeline.py  full path: seeds accounts, puts a Kinesis record, polls the API
+
+.github/workflows/
+  deploy-stable.yml    push to main → cdk deploy the persistent "staging" stack, then
+                       `pytest tests/integration -m smoke` (read-only)
+  pr-integration.yml   PR opened/updated → cdk deploy a disposable per-PR stack, run the
+                       full integration suite, then `cdk destroy` unconditionally
 ```
 
 ## Idempotency & atomicity
@@ -105,12 +114,44 @@ assertions run against a locally synthesized template.
 
 ## Integration tests
 
-Not yet implemented (`tests/integration/` doesn't exist yet). When added, the intent is
-end-to-end against a real deployed stack: put a packed record on the Kinesis stream,
-poll the AppSync API until the transaction/balance shows up, same pattern the old
-`accounts-api-stack` prototype used (`api_url`/`api_auth` fixtures, IAM-signed
-requests via `requests-aws4auth` — already a dev dependency in `pyproject.toml` for
-this reason).
+Run against a real deployed stack — no moto, no mocking. `tests/integration/conftest.py`
+resolves connection info (API URL, table name, stream name) from the target stack's
+CloudFormation outputs, keyed by `TESTING_STACK_NAME` (same shape as the old
+`accounts-api-stack` prototype's `api_url`/`api_auth` fixtures — IAM-signed requests via
+`requests-aws4auth`), so the same test files run unmodified against either stack:
+
+- `test_smoke.py` (`@pytest.mark.smoke`) — read-only: just proves AppSync IAM auth + the
+  JS resolvers + the DynamoDB data source are wired end to end. Safe to run against the
+  persistent staging stack; asserts nothing about existing data.
+- `test_transfer_pipeline.py` — full path: seeds two account rows directly via
+  `put_item`, packs a transfer record (`ingest/record.py`) and puts it on the real
+  Kinesis stream, then polls `getTransactionsForAccount`/`getAccountsForCustomer` until
+  both transaction legs and the balance move show up. **Only safe against a disposable
+  stack** — never point `TESTING_STACK_NAME` at staging for this one.
+
+```bash
+export TESTING_STACK_NAME=AccountInquiryStack-staging   # or a PR/feature stack
+uv run pytest tests/integration -m smoke -q              # read-only subset
+uv run pytest tests/integration -q                       # everything, disposable stacks only
+```
+
+AppSync's IAM authorization checks the *caller's* identity policy, not a resource policy
+on the API — so whatever principal runs these tests needs `appsync:GraphQL` granted to
+it. `stack.py`'s `grant_query()` gets wired to an externally-existing IAM user
+automatically when `CI_IAM_PRINCIPAL_ARN` is set at deploy time (see `config.py`); it's a
+no-op if unset.
+
+### CI
+
+`.github/workflows/deploy-stable.yml` (push to `main`) deploys/updates the persistent
+`AccountInquiryStack-staging` stack (`DEPLOY_ENV=staging`, retained per `config.py`) and
+runs only the smoke subset against it. `.github/workflows/pr-integration.yml` (pull
+requests targeting `main`, same-repo only) deploys a disposable
+`AccountInquiryStack-pr-<number>` stack (`DEPLOY_ENV=feature`, its own
+`KINESIS_STREAM_NAME` to avoid colliding with staging's stream), runs the full suite,
+then unconditionally `cdk destroy`s it. Both need `AWS_ACCESS_KEY_ID` /
+`AWS_SECRET_ACCESS_KEY` repo secrets and (optionally, to make the AppSync grant above
+happen) a `CI_IAM_PRINCIPAL_ARN` repo variable naming that same IAM user.
 
 ## CDK / deployment
 

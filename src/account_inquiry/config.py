@@ -22,6 +22,10 @@ class DeploySettings:
     deploy_env: str = "feature"
     kinesis_stream_name: str = "transfers"
     kinesis_shard_count: int = 1
+    # ARN of an existing IAM user/role that should be able to call the AppSync API
+    # (integration/smoke tests run as this principal). Optional — unset means nothing
+    # extra is granted, which is fine for a stack nobody needs to query externally.
+    ci_principal_arn: str | None = None
 
     @property
     def retain_data(self) -> bool:
@@ -35,4 +39,5 @@ class DeploySettings:
             kinesis_shard_count=int(
                 os.environ.get("KINESIS_SHARD_COUNT", str(cls.kinesis_shard_count))
             ),
+            ci_principal_arn=os.environ.get("CI_IAM_PRINCIPAL_ARN"),
         )

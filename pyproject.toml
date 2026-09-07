@@ -43,6 +43,9 @@ minversion = "6.0"
 testpaths = ["tests"]
 pythonpath = ["src"]
 filterwarnings = ["ignore::DeprecationWarning"]
+markers = [
+    "smoke: read-only, safe to run against the persistent/shared stack (no writes, no Kinesis records)",
+]
 
 [tool.coverage.run]
 source = ["src"]
