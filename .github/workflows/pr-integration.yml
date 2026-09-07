@@ -13,10 +13,6 @@ on:
       - main
 
 env:
-  AWS_DEFAULT_REGION: us-west-2
-  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-  CI_IAM_PRINCIPAL_ARN: ${{ vars.CI_IAM_PRINCIPAL_ARN }}
   DEPLOY_ENV: feature
   STACK_NAME: AccountInquiryStack-pr-${{ github.event.pull_request.number }}
   TESTING_STACK_NAME: AccountInquiryStack-pr-${{ github.event.pull_request.number }}
@@ -39,6 +35,10 @@ jobs:
           pip install uv
           uv sync --locked
 
+      # No AWS creds/region here on purpose: tests/unit relies on moto (see
+      # tests/conftest.py), which hardcodes us-east-1. A real AWS_DEFAULT_REGION set
+      # here would silently break it — moto scopes mocked state per-region just like
+      # real AWS, so the ingest handler's client wouldn't see the test fixture's table.
       - name: Unit tests
         run: uv run pytest tests/unit -q
 
@@ -47,10 +47,23 @@ jobs:
 
       - name: Deploy ephemeral test stack
         run: uv run cdk deploy --require-approval never
+        env:
+          AWS_DEFAULT_REGION: us-west-2
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          CI_IAM_PRINCIPAL_ARN: ${{ vars.CI_IAM_PRINCIPAL_ARN }}
 
       - name: Integration tests
         run: uv run pytest tests/integration -q
+        env:
+          AWS_DEFAULT_REGION: us-west-2
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
       - name: Destroy ephemeral test stack
         if: always()
         run: uv run cdk destroy --force
+        env:
+          AWS_DEFAULT_REGION: us-west-2
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
