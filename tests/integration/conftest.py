@@ -9,6 +9,7 @@ the ephemeral per-PR stack or the persistent staging stack — whichever one
 from __future__ import annotations
 
 import os
+import time
 from typing import Any
 
 import boto3
@@ -59,6 +60,11 @@ def stream_name() -> str:
 
 
 @pytest.fixture(scope="session")
+def ingest_function_name() -> str:
+    return _stack_output("IngestFunctionName")
+
+
+@pytest.fixture(scope="session")
 def api_auth() -> AWS4Auth:
     session = boto3.Session()
     credentials = session.get_credentials()
@@ -97,3 +103,33 @@ def ddb_table(table_name: str):
 @pytest.fixture
 def kinesis_client():
     return boto3.client("kinesis", region_name=_REGION)
+
+
+@pytest.fixture(scope="session")
+def lambda_client():
+    return boto3.client("lambda", region_name=_REGION)
+
+
+@pytest.fixture(scope="session")
+def wait_for_ingest_ready(lambda_client, ingest_function_name):
+    """On a freshly created stack, the Kinesis event source mapping doesn't start
+    polling the instant `cdk deploy` returns — it still has to transition
+    Creating -> Enabling -> Enabled. Putting a record before that finishes just wastes
+    the caller's own poll budget waiting for something that hasn't started consuming
+    yet, so wait for it explicitly, once per test session, before any test needs it."""
+
+    def _wait(timeout_seconds: float = 120.0, poll_seconds: float = 3.0) -> None:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            mappings = lambda_client.list_event_source_mappings(
+                FunctionName=ingest_function_name
+            )["EventSourceMappings"]
+            if mappings and all(m["State"] == "Enabled" for m in mappings):
+                return
+            time.sleep(poll_seconds)
+        raise AssertionError(
+            f"event source mapping for {ingest_function_name!r} not Enabled within "
+            f"{timeout_seconds:.0f}s"
+        )
+
+    return _wait
