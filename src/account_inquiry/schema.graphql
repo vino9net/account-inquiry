@@ -1,0 +1,32 @@
+enum TransactionType {
+    DEBIT
+    CREDIT
+}
+
+type Account {
+    id: ID!
+    accountId: ID!
+    name: String
+    currency: String!
+    balance: Float!
+    availBalance: Float!
+    status: String
+    updatedAt: AWSTimestamp!
+}
+
+type Transaction {
+    accountId: ID!
+    transferId: ID!
+    type: TransactionType!
+    amount: Float!
+    currency: String!
+    memo: String
+    status: String!
+    processedAt: AWSTimestamp!
+    updatedAt: AWSTimestamp!
+}
+
+type Query {
+    getAccountsForCustomer(customerId: ID!): [Account!]
+    getTransactionsForAccount(accountId: ID!): [Transaction!]
+}
