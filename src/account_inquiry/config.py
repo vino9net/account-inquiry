@@ -20,6 +20,10 @@ _RETAIN_ENVS = {"staging", "prod", "production"}
 @dataclass(frozen=True)
 class DeploySettings:
     deploy_env: str = "feature"
+    # Kinesis stream names are unique per account/region, not per stack — stack.py
+    # passes this as an explicit stream_name, so anything deploying alongside another
+    # stack (e.g. a PR's disposable stack next to staging) must override this to a
+    # distinct value or CDK's early validation rejects the changeset outright.
     kinesis_stream_name: str = "transfers"
     kinesis_shard_count: int = 1
     # ARN of an existing IAM user/role that should be able to call the AppSync API
