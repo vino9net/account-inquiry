@@ -63,7 +63,7 @@ ignore = ["E203", "E266"]
 [tool.ty]
 
 [tool.ty.src]
-include = ["src", "tests"]
+include = ["src", "tests", "scripts"]
 
 [tool.ty.rules]
 unused-ignore-comment = "warn"

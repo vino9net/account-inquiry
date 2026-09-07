@@ -62,7 +62,12 @@ def _poll_for_transaction(
     graphql_query,
     account_id: int,
     transfer_id: str,
-    attempts: int = 12,
+    # Even once the event source mapping reports State == Enabled
+    # (wait_for_ingest_ready), the very first poll on a brand-new stream+Lambda pairing
+    # has its own cold-start latency — shard iterator acquisition, first invoke — on top
+    # of that. Observed in practice taking noticeably longer than 60s on a fresh
+    # deploy, so this budget is generous on purpose rather than tuned to the common case.
+    attempts: int = 36,
     delay_seconds: float = 5.0,
 ) -> list[dict]:
     for _ in range(attempts):
@@ -78,8 +83,14 @@ def _poll_for_transaction(
 
 
 def test_transfer_moves_balance_and_appears_in_history(
-    ddb_table, kinesis_client, stream_name, graphql_query
+    ddb_table, kinesis_client, stream_name, graphql_query, wait_for_ingest_ready
 ):
+    # On a stack that was just created, the event source mapping between the stream and
+    # the ingest Lambda may still be transitioning Creating -> Enabling -> Enabled — put
+    # a record before that finishes and it just sits unconsumed until the mapping
+    # catches up, which can outlast the poll budget below on a fresh deploy.
+    wait_for_ingest_ready()
+
     _seed_account(ddb_table, customer_id=FROM_CUSTOMER_ID, account_id=FROM_ACCOUNT_ID)
     _seed_account(ddb_table, customer_id=TO_CUSTOMER_ID, account_id=TO_ACCOUNT_ID)
 

@@ -153,6 +153,23 @@ then unconditionally `cdk destroy`s it. Both need `AWS_ACCESS_KEY_ID` /
 `AWS_SECRET_ACCESS_KEY` repo secrets and (optionally, to make the AppSync grant above
 happen) a `CI_IAM_PRINCIPAL_ARN` repo variable naming that same IAM user.
 
+## Manual smoke testing
+
+`scripts/query_appsync.py` signs GraphQL requests with whatever AWS credentials are
+already active (`AWS_PROFILE`, etc.) the same way `tests/integration/conftest.py` does —
+useful for poking at a deployed stack by hand instead of writing a throwaway test.
+Defaults to the staging stack; point it elsewhere with `--stack-name` or skip the
+CloudFormation lookup entirely with `--api-url`.
+
+```bash
+uv run python scripts/query_appsync.py accounts 900001
+uv run python scripts/query_appsync.py transactions 900101
+uv run python scripts/query_appsync.py raw 'query { getAccountsForCustomer(customerId: "1") { id balance } }'
+```
+
+Only works for a principal actually granted `appsync:GraphQL` on the API — see the IAM
+auth note above.
+
 ## CDK / deployment
 
 ```bash
@@ -188,3 +205,9 @@ uv run ruff check . && uv run ruff format .
 uv run ty check
 uv run pre-commit run --all-files
 ```
+
+## Contributing
+
+`main` is protected: no direct pushes. Every change — code, docs, workflows — goes
+through a PR. `pr-integration.yml` (see "CI" above) runs the full suite against a
+disposable stack for each one; treat that as a required check before merging.
