@@ -62,7 +62,12 @@ def _poll_for_transaction(
     graphql_query,
     account_id: int,
     transfer_id: str,
-    attempts: int = 12,
+    # Even once the event source mapping reports State == Enabled
+    # (wait_for_ingest_ready), the very first poll on a brand-new stream+Lambda pairing
+    # has its own cold-start latency — shard iterator acquisition, first invoke — on top
+    # of that. Observed in practice taking noticeably longer than 60s on a fresh
+    # deploy, so this budget is generous on purpose rather than tuned to the common case.
+    attempts: int = 36,
     delay_seconds: float = 5.0,
 ) -> list[dict]:
     for _ in range(attempts):
