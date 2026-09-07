@@ -3,9 +3,13 @@ import * as ddb from "@aws-appsync/utils/dynamodb";
 
 // Transaction items live under id=account_id, sid begins_with "TRX_" — same
 // single-Query shape as the accounts-for-customer resolver, different partition.
+//
+// `Number(...)`/`Number.isFinite(...)` are NOT callable in the APPSYNC_JS sandboxed
+// runtime (see get_accounts_for_customer.js) — unary `+` and the global `isNaN` do the
+// same job without tripping the "Invalid function: Number" deploy-time validation.
 export function request(ctx) {
-  const accountId = Number(ctx.args.accountId);
-  if (!Number.isFinite(accountId)) {
+  const accountId = +ctx.args.accountId;
+  if (isNaN(accountId)) {
     util.error(`invalid accountId: ${ctx.args.accountId}`, "BadRequest");
   }
   return ddb.query({
