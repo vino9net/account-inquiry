@@ -62,8 +62,17 @@ class AccountInquiryStack(Stack):
             # policy to it. See grant_query() below for why this is needed at all:
             # AppSync's IAM auth checks the caller's own identity policy, not a
             # resource policy on the API.
+            #
+            # The construct id must be unique per *stack name*, not just per stack:
+            # CDK's logical-id hashing is relative to the enclosing stack, so a fixed id
+            # like "CiTestPrincipal" produces the identical default inline-policy name
+            # in every stack that imports this principal. That's harmless for a
+            # stack-owned resource, but this principal is external and shared — two
+            # stacks (e.g. staging and a PR's disposable stack) both deploying a policy
+            # with the same name onto the same real IAM user collide for real, since IAM
+            # policy names are unique per user, not per CloudFormation template.
             ci_principal = iam.User.from_user_arn(
-                self, "CiTestPrincipal", settings.ci_principal_arn
+                self, f"CiTestPrincipal{self.stack_name}", settings.ci_principal_arn
             )
             self.grant_query(ci_principal)
 
