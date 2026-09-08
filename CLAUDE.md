@@ -50,10 +50,15 @@ reconstruct it from logs.
 ## Wire contract (Kinesis record)
 
 `src/account_inquiry/ingest/record.py` — fixed-width 176-byte binary struct (`id`,
-`from_account`, `to_account`, `from_customer_id`, `to_customer_id`, `amount`,
-`currency`, `created_at`, `status`, `memo`). This project only consumes it; it is not
-the producer. `core-sim`'s own `record.py` does not yet emit the customer-id fields —
-this module is this repo's source of truth for the layout until that's added upstream.
+`from_account`, `to_account`, `amount`, `currency`, `created_at`, `status`, `memo`,
+`from_customer_id`, `to_customer_id`). This project only consumes it; it is not the
+producer. The field order mirrors `core-sim`'s own `record.py` exactly — `core-sim` is
+the producer, so its layout is the actual wire contract. (An earlier version of this
+module assumed `from_customer_id`/`to_customer_id` sat right after `to_account` instead
+of after `memo`; both layouts happen to pack to the same 176 bytes, so the mismatch
+never raised an error, it just silently decoded every field after `to_account` into
+garbage. `tests/wire_fixtures.py` encodes core-sim's literal layout independently of
+this module, specifically to catch a future drift like that.)
 
 ## Code structure
 

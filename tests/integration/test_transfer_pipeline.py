@@ -13,7 +13,9 @@ from __future__ import annotations
 import time
 from decimal import Decimal
 
-from account_inquiry.ingest.record import new_ulid, pack, ulid_to_str
+from wire_fixtures import pack_wire
+
+from account_inquiry.ingest.record import new_ulid, ulid_to_str
 
 FROM_CUSTOMER_ID = 900_001
 TO_CUSTOMER_ID = 900_002
@@ -96,17 +98,23 @@ def test_transfer_moves_balance_and_appears_in_history(
 
     ulid = new_ulid()
     transfer_id = ulid_to_str(ulid)
-    data = pack(
+    # Built with wire_fixtures.pack_wire (core-sim's literal wire layout), not this
+    # project's own record.pack() — this test is what should have caught the
+    # from_customer_id/to_customer_id field-order mismatch against the real producer
+    # (see ingest/record.py's module docstring). Round-tripping through our own
+    # pack()/unpack() only proves internal self-consistency, not compatibility with
+    # what core-sim actually sends.
+    data = pack_wire(
         ulid=ulid,
         from_account=FROM_ACCOUNT_ID,
         to_account=TO_ACCOUNT_ID,
-        from_customer_id=FROM_CUSTOMER_ID,
-        to_customer_id=TO_CUSTOMER_ID,
         amount=TRANSFER_AMOUNT,
         currency="SGD",
         created_at=int(time.time() * 1000),
         status=1,
         memo="integration test",
+        from_customer_id=FROM_CUSTOMER_ID,
+        to_customer_id=TO_CUSTOMER_ID,
     )
     kinesis_client.put_record(
         StreamName=stream_name, Data=data, PartitionKey=str(FROM_ACCOUNT_ID)
