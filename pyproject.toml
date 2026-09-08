@@ -13,6 +13,7 @@ dependencies = [
     "boto3>=1.34",
     "aws-lambda-powertools>=3.0",
     "python-dotenv>=1.0",
+    "redis>=5.2",
 ]
 
 [build-system]
