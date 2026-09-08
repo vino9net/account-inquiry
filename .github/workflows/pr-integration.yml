@@ -6,6 +6,16 @@ name: PR Integration Tests
 #
 # Restricted to PRs from this repo (not forks): forks don't get the AWS secrets anyway,
 # but the explicit guard makes the job skip cleanly instead of failing on missing creds.
+#
+# The deploy/integration-test/destroy steps are skipped when every changed file is under
+# scripts/** (manual CLI tooling, not part of the deployed stack) — via an in-job
+# condition, not a trigger-level path filter, so this job always runs and always reports
+# a status. That matters because "integration-test" is a required check on main's branch
+# protection: a path filter on the trigger itself would leave scripts-only PRs with no
+# status at all, stuck forever on "Expected — waiting for status to be reported" instead
+# of merging cleanly. Dependency files (pyproject.toml, uv.lock) are deliberately NOT
+# treated as scripts-only — they change rarely, and it's safer to always run the full
+# suite than to guess whether a given lockfile bump affects the deployed stack.
 
 on:
   pull_request:
@@ -24,6 +34,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect scripts-only changes
+        id: filter
+        run: |
+          changed=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          echo "changed files:"
+          echo "$changed"
+          non_scripts=$(echo "$changed" | grep -v '^scripts/')
+          if [ -n "$changed" ] && [ -z "$non_scripts" ]; then
+            echo "scripts_only=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "scripts_only=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/setup-python@v6
         with:
@@ -42,10 +67,16 @@ jobs:
       - name: Unit tests
         run: uv run pytest tests/unit -q
 
+      - name: Skip notice
+        if: steps.filter.outputs.scripts_only == 'true'
+        run: echo "All changed files are under scripts/ — skipping deploy + integration tests."
+
       - name: Install CDK CLI
+        if: steps.filter.outputs.scripts_only != 'true'
         run: npm install -g aws-cdk
 
       - name: Deploy ephemeral test stack
+        if: steps.filter.outputs.scripts_only != 'true'
         run: uv run cdk deploy --require-approval never
         env:
           AWS_DEFAULT_REGION: us-west-2
@@ -54,6 +85,7 @@ jobs:
           CI_IAM_PRINCIPAL_ARN: ${{ vars.CI_IAM_PRINCIPAL_ARN }}
 
       - name: Integration tests
+        if: steps.filter.outputs.scripts_only != 'true'
         run: uv run pytest tests/integration -q
         env:
           AWS_DEFAULT_REGION: us-west-2
@@ -61,7 +93,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
       - name: Destroy ephemeral test stack
-        if: always()
+        if: always() && steps.filter.outputs.scripts_only != 'true'
         run: uv run cdk destroy --force
         env:
           AWS_DEFAULT_REGION: us-west-2

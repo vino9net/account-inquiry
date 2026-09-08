@@ -8,6 +8,13 @@ on:
   push:
     branches:
       - main
+    # Manual/CLI-only scripts don't touch the deployed stack — skip the deploy +
+    # smoke-test cycle when a push only changes them. Dependency files (pyproject.toml,
+    # uv.lock) are deliberately NOT excluded here: they change rarely, and when they do
+    # it's safer to always run the full deploy-and-verify cycle than to guess whether a
+    # given lockfile bump is script-only.
+    paths-ignore:
+      - "scripts/**"
   workflow_dispatch:
 
 env:
