@@ -100,8 +100,8 @@ scripts/
                        `pytest tests/integration -m smoke` (read-only)
   pr-integration.yml   PR opened/updated → cdk deploy a disposable per-PR stack, run the
                        full integration suite, then `cdk destroy` unconditionally — unless
-                       every changed file is under `scripts/`, in which case deploy/test/
-                       destroy are all skipped (see "CI" below)
+                       every changed file is under `scripts/` or is a `*.md` doc, in which
+                       case deploy/test/destroy are all skipped (see "CI" below)
 ```
 
 ## Idempotency & atomicity
@@ -167,12 +167,14 @@ then unconditionally `cdk destroy`s it. Both need `AWS_ACCESS_KEY_ID` /
 happen) a `CI_IAM_PRINCIPAL_ARN` repo variable naming that same IAM user.
 
 `pr-integration.yml` still always runs (it's a required check), but when every file
-changed on the PR is under `scripts/` — manual CLI tooling, not part of the deployed
-stack — it skips the deploy/integration-test/destroy steps and reports success on unit
-tests alone. `deploy-stable.yml` uses a trigger-level `paths-ignore: scripts/**` for the
-same reason, since it isn't a required check and doesn't need to always report. Neither
-workflow treats `pyproject.toml`/`uv.lock` changes as scripts-only, even when the diff
-also touches `scripts/` — a lockfile bump always gets the full deploy-and-verify cycle.
+changed on the PR is under `scripts/` (manual CLI tooling, not part of the deployed
+stack) or is a `*.md` doc (no runtime effect at all), it skips the deploy/
+integration-test/destroy steps and reports success on unit tests alone.
+`deploy-stable.yml` uses a trigger-level `paths-ignore: ["scripts/**", "**/*.md"]` for
+the same reason, since it isn't a required check and doesn't need to always report.
+Neither workflow treats `pyproject.toml`/`uv.lock` changes as having no infra impact,
+even when the diff also touches `scripts/` or `*.md` files — a lockfile bump always
+gets the full deploy-and-verify cycle.
 
 ## Manual smoke testing
 
