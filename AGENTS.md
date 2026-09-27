@@ -89,11 +89,19 @@ tests/
     test_smoke.py           read-only, marked `smoke` — safe against the shared staging stack
     test_transfer_pipeline.py  full path: seeds accounts, puts a Kinesis record, polls the API
 
+scripts/
+  query_appsync.py   IAM-signed ad hoc GraphQL queries against a deployed stack — see
+                      "Manual smoke testing" below
+  seed_from_redis.py  copies core-sim's Redis account rows into this stack's DynamoDB
+                      table — see "Seeding accounts from core-sim" below
+
 .github/workflows/
   deploy-stable.yml    push to main → cdk deploy the persistent "staging" stack, then
                        `pytest tests/integration -m smoke` (read-only)
   pr-integration.yml   PR opened/updated → cdk deploy a disposable per-PR stack, run the
-                       full integration suite, then `cdk destroy` unconditionally
+                       full integration suite, then `cdk destroy` unconditionally — unless
+                       every changed file is under `scripts/` or is a `*.md` doc, in which
+                       case deploy/test/destroy are all skipped (see "CI" below)
 ```
 
 ## Idempotency & atomicity
@@ -158,6 +166,16 @@ then unconditionally `cdk destroy`s it. Both need `AWS_ACCESS_KEY_ID` /
 `AWS_SECRET_ACCESS_KEY` repo secrets and (optionally, to make the AppSync grant above
 happen) a `CI_IAM_PRINCIPAL_ARN` repo variable naming that same IAM user.
 
+`pr-integration.yml` still always runs (it's a required check), but when every file
+changed on the PR is under `scripts/` (manual CLI tooling, not part of the deployed
+stack) or is a `*.md` doc (no runtime effect at all), it skips the deploy/
+integration-test/destroy steps and reports success on unit tests alone.
+`deploy-stable.yml` uses a trigger-level `paths-ignore: ["scripts/**", "**/*.md"]` for
+the same reason, since it isn't a required check and doesn't need to always report.
+Neither workflow treats `pyproject.toml`/`uv.lock` changes as having no infra impact,
+even when the diff also touches `scripts/` or `*.md` files — a lockfile bump always
+gets the full deploy-and-verify cycle.
+
 ## Manual smoke testing
 
 `scripts/query_appsync.py` signs GraphQL requests with whatever AWS credentials are
@@ -174,6 +192,28 @@ uv run python scripts/query_appsync.py raw 'query { getAccountsForCustomer(custo
 
 Only works for a principal actually granted `appsync:GraphQL` on the API — see the IAM
 auth note above.
+
+## Seeding accounts from core-sim
+
+The ingest Lambda never creates Account items itself — `ingest/ddb.py`'s balance-update
+action carries `ConditionExpression="attribute_exists(id)"` specifically so a transfer
+can't materialize a phantom account. That means nothing in this repo ever seeds the
+table; every transfer for an account that hasn't been copied over first fails with
+`ConditionalCheckFailed`. `scripts/seed_from_redis.py` copies `core-sim`'s Redis account
+data (its source of truth — see `RedisLuaEngine.seed()` there) into this stack's
+DynamoDB table to bootstrap it.
+
+```bash
+uv run python scripts/seed_from_redis.py --yes                       # staging, default Redis
+uv run python scripts/seed_from_redis.py --stack-name AccountInquiryStack-pr-42 \
+    --no-wipe --yes                                                   # PR stack, upsert only
+uv run python scripts/seed_from_redis.py --dry-run                    # preview, no writes
+```
+
+By default it wipes every item (accounts *and* transactions) in the target table before
+writing accounts back, so balances always start in sync with Redis; `--no-wipe` upserts
+account rows on top of whatever is already there instead, leaving transaction history
+alone.
 
 ## CDK / deployment
 
