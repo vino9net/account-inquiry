@@ -25,7 +25,14 @@ class DeploySettings:
     # stack (e.g. a PR's disposable stack next to staging) must override this to a
     # distinct value or CDK's early validation rejects the changeset outright.
     kinesis_stream_name: str = "transfers"
-    kinesis_shard_count: int = 1
+    # 2, not 1: a single shard's Lambda event source tops out at parallelization_factor's
+    # hard ceiling of 10 concurrent invocations. Measured directly against 1 shard in
+    # banking-benchmarks' dynamodb-ingestion benchmark (100 tps in, ~38-58 tps ingested,
+    # p95 delay climbing past 500s under sustained load) — see that repo's README for the
+    # full run. 2 shards doubles both the write ceiling (2x1,000 records/sec) and the
+    # parallelization budget (2x10 concurrent invocations) for a modest, predictable
+    # added cost (~$11/shard/month in provisioned mode, ~$0.015/shard-hour).
+    kinesis_shard_count: int = 2
     # ARN of an existing IAM user/role that should be able to call the AppSync API
     # (integration/smoke tests run as this principal). Optional — unset means nothing
     # extra is granted, which is fine for a stack nobody needs to query externally.
