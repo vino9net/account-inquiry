@@ -46,7 +46,9 @@ class DeploySettings:
     def from_env(cls) -> DeploySettings:
         return cls(
             deploy_env=os.environ.get("DEPLOY_ENV", cls.deploy_env),
-            kinesis_stream_name=os.environ.get("KINESIS_STREAM_NAME", cls.kinesis_stream_name),
+            kinesis_stream_name=os.environ.get(
+                "KINESIS_STREAM_NAME", cls.kinesis_stream_name
+            ),
             kinesis_shard_count=int(
                 os.environ.get("KINESIS_SHARD_COUNT", str(cls.kinesis_shard_count))
             ),

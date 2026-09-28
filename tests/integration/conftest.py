@@ -34,7 +34,9 @@ def _stack_output(key: str) -> str:
             response = client.describe_stacks(StackName=_STACK_NAME)
         except ClientError as e:
             raise Exception(f"cannot find stack {_STACK_NAME!r} in {_REGION}") from e
-        _outputs = {o["OutputKey"]: o["OutputValue"] for o in response["Stacks"][0]["Outputs"]}
+        _outputs = {
+            o["OutputKey"]: o["OutputValue"] for o in response["Stacks"][0]["Outputs"]
+        }
 
     try:
         return _outputs[key]

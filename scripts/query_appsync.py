@@ -75,7 +75,9 @@ def _api_auth(region: str) -> AWS4Auth:
     session = boto3.Session()
     credentials = session.get_credentials()
     if credentials is None:
-        raise SystemExit("no AWS credentials found (set AWS_PROFILE or AWS_ACCESS_KEY_ID/SECRET)")
+        raise SystemExit(
+            "no AWS credentials found (set AWS_PROFILE or AWS_ACCESS_KEY_ID/SECRET)"
+        )
     return AWS4Auth(
         credentials.access_key,
         credentials.secret_key,
@@ -102,7 +104,9 @@ def main() -> int:
         default="AccountInquiryStack-staging",
         help="CloudFormation stack to resolve the API URL from (default: %(default)s)",
     )
-    parser.add_argument("--region", default="us-west-2", help="AWS region (default: %(default)s)")
+    parser.add_argument(
+        "--region", default="us-west-2", help="AWS region (default: %(default)s)"
+    )
     parser.add_argument(
         "--api-url", help="skip the CloudFormation lookup, query this URL directly"
     )
@@ -121,13 +125,19 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    api_url = args.api_url or _stack_output(args.stack_name, args.region, "AccountInquiryApiUrl")
+    api_url = args.api_url or _stack_output(
+        args.stack_name, args.region, "AccountInquiryApiUrl"
+    )
     auth = _api_auth(args.region)
 
     if args.command == "accounts":
-        result = _run_query(api_url, auth, _ACCOUNTS_QUERY, {"customerId": args.customer_id})
+        result = _run_query(
+            api_url, auth, _ACCOUNTS_QUERY, {"customerId": args.customer_id}
+        )
     elif args.command == "transactions":
-        result = _run_query(api_url, auth, _TRANSACTIONS_QUERY, {"accountId": args.account_id})
+        result = _run_query(
+            api_url, auth, _TRANSACTIONS_QUERY, {"accountId": args.account_id}
+        )
     else:
         result = _run_query(api_url, auth, args.query, json.loads(args.variables))
 
