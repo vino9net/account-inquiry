@@ -5,12 +5,14 @@ from __future__ import annotations
 import base64
 import os
 from decimal import Decimal
+from unittest.mock import patch
 
 import boto3
 import pytest
 from botocore.exceptions import ClientError
 from moto import mock_aws
 
+from account_inquiry.ingest.handler import _dynamodb as ddb_client
 from account_inquiry.ingest.handler import lambda_handler, process_record
 from account_inquiry.ingest.record import new_ulid, pack, ulid_to_str
 
@@ -115,6 +117,63 @@ def test_transfer_to_unknown_account_does_not_move_balance(ddb_table):
 
     debit = ddb_table.get_item(Key={"id": 100, "sid": "ACC_1"})["Item"]
     assert debit["balance"] == Decimal(1_000_000)  # untouched — all-or-nothing
+
+
+def _transaction_conflict() -> Exception:
+    """A TransactionCanceledException shaped like a real conflict on the balance
+    Update (index 2 — see ddb.py's action order), not a ConditionalCheckFailed on
+    either transaction-item Put (indices 0-1)."""
+    error_response = {
+        "Error": {"Code": "TransactionCanceledException", "Message": "cancelled"},
+        "CancellationReasons": [
+            {"Code": "None"},
+            {"Code": "None"},
+            {"Code": "TransactionConflict", "Message": "ongoing for the item"},
+            {"Code": "None"},
+        ],
+    }
+    return ddb_client.exceptions.TransactionCanceledException(
+        error_response, "TransactWriteItems"
+    )
+
+
+def test_transaction_conflict_is_retried_and_succeeds(ddb_table):
+    data = _transfer_record()
+    real_transact_write_items = ddb_client.transact_write_items
+    calls = [0]
+
+    def flaky(*args, **kwargs):
+        calls[0] += 1
+        if calls[0] == 1:
+            raise _transaction_conflict()
+        return real_transact_write_items(*args, **kwargs)
+
+    with (
+        patch.object(ddb_client, "transact_write_items", side_effect=flaky),
+        patch("account_inquiry.ingest.handler.time.sleep"),
+    ):
+        process_record(TABLE_NAME, data)
+
+    assert calls[0] == 2  # first attempt conflicted, second succeeded
+    debit = ddb_table.get_item(Key={"id": 100, "sid": "ACC_1"})["Item"]
+    assert debit["balance"] == Decimal(1_000_000 - 500)
+
+
+def test_transaction_conflict_exhausts_retries_then_propagates(ddb_table):
+    data = _transfer_record()
+
+    with (
+        patch.object(
+            ddb_client, "transact_write_items", side_effect=_transaction_conflict()
+        ) as mock_write,
+        patch("account_inquiry.ingest.handler.time.sleep"),
+        pytest.raises(ddb_client.exceptions.TransactionCanceledException),
+    ):
+        process_record(TABLE_NAME, data)
+
+    assert mock_write.call_count == 4  # initial attempt + 3 retries (_MAX_CONFLICT_RETRIES)
+    debit = ddb_table.get_item(Key={"id": 100, "sid": "ACC_1"})["Item"]
+    assert debit["balance"] == Decimal(1_000_000)  # never applied
 
 
 def _kinesis_event(records: list[bytes]) -> dict:

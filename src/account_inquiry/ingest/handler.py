@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import os
+import random
 import time
 from typing import Any
 
@@ -32,6 +33,13 @@ logger = Logger()
 metrics = Metrics(namespace="AccountInquiry")
 
 _dynamodb = boto3.client("dynamodb")
+# A conflict typically clears within single-digit ms (it's another TransactWriteItems
+# call finishing, not a slow/stuck resource), so a handful of quick local retries with
+# a little jitter almost always turns a conflict into a same-invocation success —
+# without them, the only recourse is failing the record and letting Kinesis roll the
+# shard's checkpoint back to it, which redelivers every record after it in the batch
+# too, including ones that already succeeded.
+_MAX_CONFLICT_RETRIES = 3
 
 
 def _table_name() -> str:
@@ -51,21 +59,41 @@ def _is_conditional_check_failure(exc: ClientError) -> bool:
     return any(r.get("Code") == "ConditionalCheckFailed" for r in reasons[:2])
 
 
+def _has_transaction_conflict(exc: ClientError) -> bool:
+    """True if any cancellation reason is TransactionConflict — another in-flight
+    TransactWriteItems call touching one of this transfer's items, not a permanent
+    failure. Distinct from _is_conditional_check_failure: that's "already applied,
+    nothing to do"; this is "try the exact same write again in a moment"."""
+    reasons = exc.response.get("CancellationReasons", [])
+    return any(r.get("Code") == "TransactionConflict" for r in reasons)
+
+
 def process_record(table_name: str, data: bytes) -> None:
     record = unpack(data)
     updated_at = int(time.time() * 1000)
     items = build_transact_items(table_name, record, updated_at)
 
-    try:
-        _dynamodb.transact_write_items(TransactItems=items)
-    except _dynamodb.exceptions.TransactionCanceledException as exc:
-        if _is_conditional_check_failure(exc):
-            logger.info("transfer.already_applied", transfer_id=record.id)
-            metrics.add_metric(
-                name="TransferAlreadyApplied", unit=MetricUnit.Count, value=1
-            )
-            return
-        raise
+    for attempt in range(_MAX_CONFLICT_RETRIES + 1):
+        try:
+            _dynamodb.transact_write_items(TransactItems=items)
+            break
+        except _dynamodb.exceptions.TransactionCanceledException as exc:
+            if _is_conditional_check_failure(exc):
+                logger.info("transfer.already_applied", transfer_id=record.id)
+                metrics.add_metric(
+                    name="TransferAlreadyApplied", unit=MetricUnit.Count, value=1
+                )
+                return
+            if attempt < _MAX_CONFLICT_RETRIES and _has_transaction_conflict(exc):
+                logger.info(
+                    "transfer.conflict_retry", transfer_id=record.id, attempt=attempt + 1
+                )
+                metrics.add_metric(
+                    name="TransferConflictRetried", unit=MetricUnit.Count, value=1
+                )
+                time.sleep(random.uniform(0.005, 0.02) * (attempt + 1))  # noqa: S311
+                continue
+            raise
 
     latency_ms = updated_at - record.created_at
     logger.info("transfer.applied", transfer_id=record.id, latency_ms=latency_ms)
