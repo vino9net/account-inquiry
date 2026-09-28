@@ -254,28 +254,18 @@ Plain AWS CLI, not a CDK command — `cdk destroy` operates on the whole stack (
 broad a blast radius just to drop one idle stream) and wouldn't touch it anyway under
 `RemovalPolicy.RETAIN`.
 
-**A plain `cdk deploy` after that will *not* bring it back**, even though the stack's
-CloudFormation state now points at a resource that no longer exists — verified directly
-against this stack with `cdk diff`: with an unchanged template, the stream doesn't appear
-in the diff at all. CloudFormation only acts on resources when the *template* changes; it
-never proactively checks whether physical resources still exist. A previous version of
-this note claimed the opposite (that the next deploy "finds it missing and recreates it
-fresh") — that was wrong, unverified, and got corrected only after banking-benchmarks hit
-it for real during a teardown.
+**Bringing it back is not just `cdk deploy`.** Verified directly against this stack with
+`cdk diff`: with an unchanged template, a manually-deleted-but-still-`RETAIN`'d resource
+doesn't appear in the diff at all. CloudFormation only acts on resources when the
+*template* changes; it never proactively checks whether physical resources still exist.
+A full `cdk destroy` + `cdk deploy` of the whole stack *would* recreate it (`destroy`
+forgets the stack's CloudFormation state entirely, so the next `deploy` starts from
+nothing), but that drags `AccountsTable` — also `RemovalPolicy.RETAIN`, with no fixed
+name — into the same reset, permanently orphaning the previous table and minting a new
+one. Not worth it just to fix one unrelated resource.
 
-A full `cdk destroy` of the whole stack followed by `cdk deploy` *would* bring the stream
-back — `destroy` forgets the stack's CloudFormation state entirely, so the next `deploy`
-starts from nothing and genuinely recreates everything. **Deliberately not used for
-this**, though: `AccountsTable` is *also* `RemovalPolicy.RETAIN` and has no fixed name, so
-every such cycle would permanently orphan the previous table and create a new one on the
-next deploy. Storage cost is irrelevant either way (DynamoDB's free tier is 25GB/month;
-this table has never exceeded ~1GB) — the actual objection is that it drags an unrelated
-resource into a rebuild it never needed, just to fix the one resource that does.
-
-What's actually used instead (see banking-benchmarks' `AGENTS.md`, "Tearing down between
-runs" — the source of truth for the full teardown/ramp-up runbook, since it's the repo
-that owns the VMs driving load): plain AWS CLI, recreating the stream with the exact
-properties CDK would generate, verified via `cdk synth` rather than assumed:
+The plain-CLI equivalent, matching this construct's actual generated properties (verified
+via `cdk synth`, not assumed):
 
 ```bash
 aws kinesis create-stream --stream-name transfers --shard-count 2 --region <region>
@@ -284,35 +274,29 @@ aws kinesis start-stream-encryption --stream-name transfers \
     --encryption-type KMS --key-id alias/aws/kinesis --region <region>
 ```
 
-The `start-stream-encryption` call matters — a plain `create-stream` does *not* enable
-encryption by default, but `cdk synth`'s output shows this construct does
-(`StreamEncryption: {EncryptionType: KMS, KeyId: alias/aws/kinesis}`), so skipping it
-would leave a real (if minor) gap from what CDK actually deploys. 24h retention needs no
-extra call — it's already AWS's default for a new stream, matching this construct's
+`start-stream-encryption` matters — a plain `create-stream` does *not* enable encryption
+by default, but `cdk synth`'s output shows this construct does
+(`StreamEncryption: {EncryptionType: KMS, KeyId: alias/aws/kinesis}`). 24h retention needs
+no extra call — it's already AWS's default for a new stream, matching this construct's
 explicit `Duration.hours(24)`.
 
 Deleting the stream doesn't delete the ingest Lambda's event source mapping — it
-auto-disables instead (`aws lambda list-event-source-mappings` will show
-`State: Disabled` and `LastProcessingResult: "PROBLEM: Stream not found. Recreate the
-stream and re-enable the event source mapping..."`). Once the stream is back, re-enable
-the same mapping rather than recreating it:
+auto-disables instead (`aws lambda list-event-source-mappings` shows `State: Disabled`,
+`LastProcessingResult: "PROBLEM: Stream not found. Recreate the stream and re-enable the
+event source mapping..."`). Once the stream is back, re-enable that same mapping rather
+than recreating it:
 
 ```bash
 aws lambda update-event-source-mapping --uuid <uuid> --enabled --region <region>
 ```
 
 Since the stream name is fixed, its ARN is identical before and after, so nothing else
-(IAM policies, the mapping's own config) needs to change.
-
-This does leave the stream permanently outside CloudFormation's bookkeeping —
-`aws cloudformation detect-stack-drift` will keep reporting `TransfersStream` as
-`DELETED` drift relative to the stack (verified: drift detection genuinely does compare
-live AWS state against the template, unlike a plain `deploy`/`diff`, which only compares
-template-to-template — but detection is purely diagnostic, there's no automatic
-remediation). Re-adopting the stream into the stack's management is possible via
-`cdk import`, but isn't done here — nothing in this repo needs CDK to manage the stream's
-day-to-day lifecycle, so the permanent drift is accepted rather than worth the added
-process.
+(IAM policies, the mapping's own config) needs to change. This does leave the stream
+permanently outside CloudFormation's bookkeeping (`aws cloudformation
+detect-stack-drift` will keep reporting `TransfersStream` as `DELETED` drift — drift
+detection genuinely compares live AWS state, unlike `deploy`/`diff`, but it's diagnostic
+only, with no automatic remediation). Re-adopting it via `cdk import` is possible but not
+done here; nothing in this repo needs CDK managing the stream's day-to-day lifecycle.
 
 ## Bundling
 
