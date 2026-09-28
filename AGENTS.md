@@ -232,6 +232,33 @@ See `config.py` (`DeploySettings.retain_data`).
 can set `AWS_PROFILE`, `DEPLOY_ENV`, `KINESIS_STREAM_NAME`, etc. without polluting the
 shell. Values already exported in the shell take precedence over `.env`.
 
+### Kinesis costs while idle
+
+The "transfers" stream is a **provisioned**-capacity stream (no `stream_mode` set), so
+it's billed per shard-hour continuously for as long as it exists — whether or not
+anything is writing to or reading from it, and independent of any EC2/Lambda usage
+elsewhere. There is no on-demand or serverless tier of Kinesis Data Streams that costs
+$0 while idle (unlike this stack's DynamoDB table, which is genuinely free at rest in
+its on-demand billing mode). Roughly $0.015/shard-hour (~$11/shard/month) — check AWS's
+current pricing page for the exact rate.
+
+For `staging`/`prod`, `retain_data` sets `RemovalPolicy.RETAIN` on the stream, so **`cdk
+destroy` will not delete it** — it becomes an orphaned resource that keeps billing after
+the stack is gone. To actually stop paying for it, delete the stream directly:
+
+```bash
+aws kinesis delete-stream --stream-name transfers --region <region>
+```
+
+Plain AWS CLI, not a CDK command — `cdk destroy` operates on the whole stack (far too
+broad a blast radius just to drop one idle stream) and wouldn't touch it anyway under
+`RemovalPolicy.RETAIN`. This does leave the stack's CloudFormation state pointing at a
+resource that no longer exists; the next `cdk deploy` (e.g. the next push to `main`)
+finds it missing and recreates it fresh from the template rather than restoring the
+deleted one — don't try to hand-craft an equivalent `aws kinesis create-stream` to get
+it back, since CLI-created streams won't pick up whatever CDK-managed settings
+(encryption, tags) the template applies automatically on create.
+
 ## Bundling
 
 The ingest Lambda only needs `boto3` + `aws-lambda-powertools` — both pure Python, so
