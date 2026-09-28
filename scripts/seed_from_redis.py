@@ -24,8 +24,7 @@ Pass --wipe-only to empty the table and stop — no Redis connection is made and
 is written back, for whenever you want the table emptied without immediately reseeding
 it (e.g. no Redis reachable right now). Note: DynamoDB on-demand storage is free
 regardless of item count, so this is about getting a clean, empty table on purpose, not
-about saving money — banking-benchmarks' teardown runbook deliberately leaves this table
-alone rather than wiping it, since it isn't the cost problem there (Kinesis is).
+about saving money — there's no cost reason to wipe this table on its own.
 
 Examples:
     # staging, default Redis (redis://localhost:6379 - e.g. after `kubectl port-forward`)
