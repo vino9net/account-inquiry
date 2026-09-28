@@ -53,13 +53,16 @@ source = ["src"]
 omit = ["tests/*"]
 
 [tool.ruff]
-line-length = 98
+line-length = 92
 indent-width = 4
 exclude = [".git", "__pycache__", "venv", ".venv", "cdk.out"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "C", "I", "A"]
-ignore = ["E203", "E266"]
+select = ["E", "F", "W", "C", "I", "A", "B", "S", "UP"]
+ignore = ["E203", "E266", "S101"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
 
 [tool.ty]
 

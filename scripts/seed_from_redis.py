@@ -57,7 +57,8 @@ def _stack_table_name(stack_name: str, region: str) -> str:
         return outputs[_TABLE_OUTPUT_KEY]
     except KeyError:
         raise SystemExit(
-            f"stack {stack_name!r} has no output {_TABLE_OUTPUT_KEY!r} (has: {sorted(outputs)})"
+            f"stack {stack_name!r} has no output {_TABLE_OUTPUT_KEY!r} "
+            f"(has: {sorted(outputs)})"
         ) from None
 
 
@@ -139,7 +140,9 @@ def main() -> int:
         help="CloudFormation stack to resolve the DynamoDB table name from "
         "(default: %(default)s)",
     )
-    parser.add_argument("--region", default="us-west-2", help="AWS region (default: %(default)s)")
+    parser.add_argument(
+        "--region", default="us-west-2", help="AWS region (default: %(default)s)"
+    )
     parser.add_argument(
         "--table-name", help="skip the CloudFormation lookup, write directly to this table"
     )
@@ -175,7 +178,9 @@ def main() -> int:
 
     if args.dry_run:
         action = "wipe every item, then" if not args.no_wipe else "upsert only —"
-        print(f"--dry-run: would {action} write {len(accounts)} account items. Stopping here.")
+        print(
+            f"--dry-run: would {action} write {len(accounts)} account items. Stopping here."
+        )
         return 0
 
     if not args.yes:

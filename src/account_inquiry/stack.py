@@ -1,10 +1,10 @@
 """Account Inquiry stack: DynamoDB projection + AppSync API, fed by a Kinesis Data
 Stream of transfer events.
 
-    Kinesis (transfers) --event source mapping--> Lambda (ingest) --TransactWriteItems--> DynamoDB
-                                                                                              |
-                                                                    AppSync (IAM auth) --------+
-                                                                    JS resolvers, direct DDB DS
+    Kinesis --event source mapping--> Lambda (ingest) --TransactWriteItems--> DynamoDB
+                                                                                  |
+                                                       AppSync (IAM auth) --------+
+                                                       JS resolvers, direct DDB DS
 
 Table design (see ingest/ddb.py for the write side):
 
@@ -84,7 +84,9 @@ class AccountInquiryStack(Stack):
     # ------------------------------------------------------------------ storage
 
     def _table(self) -> dynamodb.TableV2:
-        removal = RemovalPolicy.RETAIN if self.settings.retain_data else RemovalPolicy.DESTROY
+        removal = (
+            RemovalPolicy.RETAIN if self.settings.retain_data else RemovalPolicy.DESTROY
+        )
         return dynamodb.TableV2(
             self,
             "AccountsTable",
@@ -99,7 +101,9 @@ class AccountInquiryStack(Stack):
         )
 
     def _kinesis_stream(self) -> kinesis.Stream:
-        removal = RemovalPolicy.RETAIN if self.settings.retain_data else RemovalPolicy.DESTROY
+        removal = (
+            RemovalPolicy.RETAIN if self.settings.retain_data else RemovalPolicy.DESTROY
+        )
         return kinesis.Stream(
             self,
             "TransfersStream",
@@ -111,7 +115,9 @@ class AccountInquiryStack(Stack):
 
     # ------------------------------------------------------------------ ingest lambda
 
-    def _ingest_lambda(self, table: dynamodb.TableV2, stream: kinesis.Stream) -> _lambda.Function:
+    def _ingest_lambda(
+        self, table: dynamodb.TableV2, stream: kinesis.Stream
+    ) -> _lambda.Function:
         dlq = sqs.Queue(
             self,
             "IngestDlq",
@@ -230,14 +236,18 @@ class AccountInquiryStack(Stack):
             "GetAccountsForCustomerResolver",
             type_name="Query",
             field_name="getAccountsForCustomer",
-            code=appsync.Code.from_asset(f"{_SRC_DIR}/resolvers/get_accounts_for_customer.js"),
+            code=appsync.Code.from_asset(
+                f"{_SRC_DIR}/resolvers/get_accounts_for_customer.js"
+            ),
             runtime=appsync.FunctionRuntime.JS_1_0_0,
         )
         ds.create_resolver(
             "GetTransactionsForAccountResolver",
             type_name="Query",
             field_name="getTransactionsForAccount",
-            code=appsync.Code.from_asset(f"{_SRC_DIR}/resolvers/get_transactions_for_account.js"),
+            code=appsync.Code.from_asset(
+                f"{_SRC_DIR}/resolvers/get_transactions_for_account.js"
+            ),
             runtime=appsync.FunctionRuntime.JS_1_0_0,
         )
 

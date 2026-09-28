@@ -136,8 +136,7 @@ def test_transfer_moves_balance_and_appears_in_history(
     assert credit_leg["type"] == "CREDIT"
     assert credit_leg["amount"] == TRANSFER_AMOUNT
 
-    accounts = graphql_query(_ACCOUNTS_QUERY, {"customerId": str(FROM_CUSTOMER_ID)})["data"][
-        "getAccountsForCustomer"
-    ]
+    result = graphql_query(_ACCOUNTS_QUERY, {"customerId": str(FROM_CUSTOMER_ID)})
+    accounts = result["data"]["getAccountsForCustomer"]
     from_account = next(a for a in accounts if a["accountId"] == str(FROM_ACCOUNT_ID))
     assert from_account["balance"] == float(STARTING_BALANCE - TRANSFER_AMOUNT)

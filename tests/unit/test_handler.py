@@ -8,6 +8,7 @@ from decimal import Decimal
 
 import boto3
 import pytest
+from botocore.exceptions import ClientError
 from moto import mock_aws
 
 from account_inquiry.ingest.handler import lambda_handler, process_record
@@ -109,7 +110,7 @@ def test_duplicate_delivery_is_a_noop_not_a_double_apply(ddb_table):
 
 def test_transfer_to_unknown_account_does_not_move_balance(ddb_table):
     data = _transfer_record(to_account=999_999, to_customer_id=999)
-    with pytest.raises(Exception):
+    with pytest.raises(ClientError):  # account-not-found guard on the balance Update
         process_record(TABLE_NAME, data)
 
     debit = ddb_table.get_item(Key={"id": 100, "sid": "ACC_1"})["Item"]

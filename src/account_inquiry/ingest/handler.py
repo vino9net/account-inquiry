@@ -61,14 +61,18 @@ def process_record(table_name: str, data: bytes) -> None:
     except _dynamodb.exceptions.TransactionCanceledException as exc:
         if _is_conditional_check_failure(exc):
             logger.info("transfer.already_applied", transfer_id=record.id)
-            metrics.add_metric(name="TransferAlreadyApplied", unit=MetricUnit.Count, value=1)
+            metrics.add_metric(
+                name="TransferAlreadyApplied", unit=MetricUnit.Count, value=1
+            )
             return
         raise
 
     latency_ms = updated_at - record.created_at
     logger.info("transfer.applied", transfer_id=record.id, latency_ms=latency_ms)
     metrics.add_metric(name="TransferApplied", unit=MetricUnit.Count, value=1)
-    metrics.add_metric(name="IngestionLatencyMs", unit=MetricUnit.Milliseconds, value=latency_ms)
+    metrics.add_metric(
+        name="IngestionLatencyMs", unit=MetricUnit.Milliseconds, value=latency_ms
+    )
 
 
 @metrics.log_metrics
