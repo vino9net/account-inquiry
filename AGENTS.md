@@ -263,21 +263,56 @@ this note claimed the opposite (that the next deploy "finds it missing and recre
 fresh") — that was wrong, unverified, and got corrected only after banking-benchmarks hit
 it for real during a teardown.
 
-What *does* work: a full `cdk destroy` of the whole stack followed by `cdk deploy`. Since
-`destroy` forgets the stack's CloudFormation state entirely, the next `deploy` starts from
-nothing and genuinely recreates the stream — this is what banking-benchmarks'
-`AGENTS.md` ("Tearing down between runs") now uses as the standard teardown/ramp-up
-cycle for exactly this reason. The tradeoff: `AccountsTable` is *also*
-`RemovalPolicy.RETAIN` and has no fixed name, so every such cycle permanently orphans the
-previous table and creates a new one on the next deploy. Harmless for cost (DynamoDB
-storage is free under 25GB/month; this table has never exceeded ~1GB) but real sprawl —
-accepted as the price of not hand-rolling stream/table recovery. If avoiding table sprawl
-ever matters more than avoiding one manual command, handle the stream in isolation (the
-`aws kinesis delete-stream` above, without a full stack destroy) instead.
+A full `cdk destroy` of the whole stack followed by `cdk deploy` *would* bring the stream
+back — `destroy` forgets the stack's CloudFormation state entirely, so the next `deploy`
+starts from nothing and genuinely recreates everything. **Deliberately not used for
+this**, though: `AccountsTable` is *also* `RemovalPolicy.RETAIN` and has no fixed name, so
+every such cycle would permanently orphan the previous table and create a new one on the
+next deploy. Storage cost is irrelevant either way (DynamoDB's free tier is 25GB/month;
+this table has never exceeded ~1GB) — the actual objection is that it drags an unrelated
+resource into a rebuild it never needed, just to fix the one resource that does.
 
-Don't hand-craft an equivalent `aws kinesis create-stream` to bring the stream back
-outside of `cdk deploy` either way — CLI-created streams won't pick up whatever
-CDK-managed settings (encryption, tags) the template applies automatically on create.
+What's actually used instead (see banking-benchmarks' `AGENTS.md`, "Tearing down between
+runs" — the source of truth for the full teardown/ramp-up runbook, since it's the repo
+that owns the VMs driving load): plain AWS CLI, recreating the stream with the exact
+properties CDK would generate, verified via `cdk synth` rather than assumed:
+
+```bash
+aws kinesis create-stream --stream-name transfers --shard-count 2 --region <region>
+# wait for the stream to reach ACTIVE
+aws kinesis start-stream-encryption --stream-name transfers \
+    --encryption-type KMS --key-id alias/aws/kinesis --region <region>
+```
+
+The `start-stream-encryption` call matters — a plain `create-stream` does *not* enable
+encryption by default, but `cdk synth`'s output shows this construct does
+(`StreamEncryption: {EncryptionType: KMS, KeyId: alias/aws/kinesis}`), so skipping it
+would leave a real (if minor) gap from what CDK actually deploys. 24h retention needs no
+extra call — it's already AWS's default for a new stream, matching this construct's
+explicit `Duration.hours(24)`.
+
+Deleting the stream doesn't delete the ingest Lambda's event source mapping — it
+auto-disables instead (`aws lambda list-event-source-mappings` will show
+`State: Disabled` and `LastProcessingResult: "PROBLEM: Stream not found. Recreate the
+stream and re-enable the event source mapping..."`). Once the stream is back, re-enable
+the same mapping rather than recreating it:
+
+```bash
+aws lambda update-event-source-mapping --uuid <uuid> --enabled --region <region>
+```
+
+Since the stream name is fixed, its ARN is identical before and after, so nothing else
+(IAM policies, the mapping's own config) needs to change.
+
+This does leave the stream permanently outside CloudFormation's bookkeeping —
+`aws cloudformation detect-stack-drift` will keep reporting `TransfersStream` as
+`DELETED` drift relative to the stack (verified: drift detection genuinely does compare
+live AWS state against the template, unlike a plain `deploy`/`diff`, which only compares
+template-to-template — but detection is purely diagnostic, there's no automatic
+remediation). Re-adopting the stream into the stack's management is possible via
+`cdk import`, but isn't done here — nothing in this repo needs CDK to manage the stream's
+day-to-day lifecycle, so the permanent drift is accepted rather than worth the added
+process.
 
 ## Bundling
 
