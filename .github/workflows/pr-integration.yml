@@ -44,7 +44,10 @@ jobs:
           changed=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
           echo "changed files:"
           echo "$changed"
-          remainder=$(echo "$changed" | grep -vE '^scripts/|\.md$')
+          # grep exits 1 (not an error here) when every changed file matches the
+          # pattern, i.e. remainder is legitimately empty — that's the true/no-infra
+          # case this step exists to detect, so don't let `set -e` treat it as a failure.
+          remainder=$(echo "$changed" | grep -vE '^scripts/|\.md$' || true)
           if [ -n "$changed" ] && [ -z "$remainder" ]; then
             echo "no_infra_change=true" >> "$GITHUB_OUTPUT"
           else
