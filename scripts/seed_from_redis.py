@@ -20,11 +20,20 @@ start in sync with Redis's — pass --no-wipe to upsert account rows on top of w
 already there instead (existing transaction history is left alone either way when
 --no-wipe is set).
 
+Pass --wipe-only to empty the table and stop — no Redis connection is made and nothing
+is written back. This is for tearing a benchmark run down to save cost (DynamoDB
+on-demand billing means an empty table costs nothing to leave around) when Redis itself
+is about to be gone too (e.g. the VM it runs on is being terminated right after).
+
 Examples:
     # staging, default Redis (redis://localhost:6379 - e.g. after `kubectl port-forward`)
     uv run python scripts/seed_from_redis.py --yes
 
     uv run python scripts/seed_from_redis.py --redis-url redis://localhost:6380 --yes
+
+    # tearing down: empty the table, don't reseed (no Redis needed for this one)
+    uv run python scripts/seed_from_redis.py --stack-name AccountInquiryStack-staging \\
+        --wipe-only --yes
 
     # a disposable PR stack, upsert only (keep existing transaction history)
     uv run python scripts/seed_from_redis.py --stack-name AccountInquiryStack-pr-42 \\
@@ -123,6 +132,28 @@ def _write_accounts(table, accounts: list[dict[str, Any]]) -> int:
     return len(accounts)
 
 
+def _plan_description(args: argparse.Namespace, n_accounts: int) -> tuple[str, str]:
+    """(dry-run action phrase, confirmation-prompt verb phrase) for the mode args select."""
+    if args.wipe_only:
+        return (
+            "delete every item in",
+            "DELETE ALL ITEMS (accounts + transactions) in and leave empty",
+        )
+    if not args.no_wipe:
+        return (
+            f"wipe every item, then write {n_accounts} account items to",
+            "WIPE ALL ITEMS (accounts + transactions) in and reseed",
+        )
+    return f"upsert {n_accounts} account items into", "upsert accounts into"
+
+
+def _confirm(args: argparse.Namespace, table_name: str, verb: str) -> bool:
+    if args.yes:
+        return True
+    answer = input(f"About to {verb} {table_name!r}. Type 'yes' to continue: ")
+    return answer.strip().lower() == "yes"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -149,6 +180,12 @@ def main() -> int:
         help="upsert account rows only — do not delete existing items first",
     )
     parser.add_argument(
+        "--wipe-only",
+        action="store_true",
+        help="delete every item and stop — no Redis read, no write back "
+        "(mutually exclusive with --no-wipe)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="read Redis and report what would happen, but touch no DynamoDB data",
@@ -161,35 +198,39 @@ def main() -> int:
         "since this still overwrites any account rows already in the table)",
     )
     args = parser.parse_args()
+    if args.wipe_only and args.no_wipe:
+        raise SystemExit("--wipe-only and --no-wipe are mutually exclusive")
 
-    print(f"reading accounts from {args.redis_url} ...")
-    accounts = _read_redis_accounts(args.redis_url)
-    if not accounts:
-        raise SystemExit(f"no acct:* keys found at {args.redis_url} — nothing to copy")
-    n_customers = len({a["customer_id"] for a in accounts})
-    print(f"found {len(accounts)} accounts across {n_customers} customers in Redis")
+    accounts: list[dict[str, Any]] = []
+    if not args.wipe_only:
+        print(f"reading accounts from {args.redis_url} ...")
+        accounts = _read_redis_accounts(args.redis_url)
+        if not accounts:
+            raise SystemExit(f"no acct:* keys found at {args.redis_url} — nothing to copy")
+        n_customers = len({a["customer_id"] for a in accounts})
+        print(f"found {len(accounts)} accounts across {n_customers} customers in Redis")
 
     table_name = args.table_name or _stack_table_name(args.stack_name, args.region)
     target = args.table_name or f"{args.stack_name} ({args.region})"
     print(f"target DynamoDB table: {table_name} [{target}]")
 
+    dry_run_action, confirm_verb = _plan_description(args, len(accounts))
+
     if args.dry_run:
-        action = "wipe every item, then" if not args.no_wipe else "upsert only —"
-        print(f"--dry-run: would {action} write {len(accounts)} account items. Stopping here.")
+        print(f"--dry-run: would {dry_run_action} {table_name!r}. Stopping here.")
         return 0
 
-    if not args.yes:
-        verb = (
-            "WIPE ALL ITEMS (accounts + transactions) in and reseed"
-            if not args.no_wipe
-            else "upsert accounts into"
-        )
-        answer = input(f"About to {verb} {table_name!r}. Type 'yes' to continue: ")
-        if answer.strip().lower() != "yes":
-            print("aborted.")
-            return 1
+    if not _confirm(args, table_name, confirm_verb):
+        print("aborted.")
+        return 1
 
     table = boto3.resource("dynamodb", region_name=args.region).Table(table_name)
+
+    if args.wipe_only:
+        print("wiping all items ...")
+        deleted = _wipe_table(table)
+        print(f"deleted {deleted} items; table left empty")
+        return 0
 
     if not args.no_wipe:
         print("wiping existing items ...")
