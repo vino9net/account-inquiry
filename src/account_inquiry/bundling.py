@@ -41,10 +41,14 @@ class PipLocalBundling:
         # equivalent that doesn't need one. Fall back to plain pip for anyone running
         # this outside a uv-managed environment.
         uv = shutil.which("uv")
-        base_cmd = [uv, "pip", "install"] if uv else [sys.executable, "-m", "pip", "install"]
+        base_cmd = (
+            [uv, "pip", "install"] if uv else [sys.executable, "-m", "pip", "install"]
+        )
         install_cmd = [*base_cmd, *self._requirements, "--target", output_dir]
         try:
-            subprocess.run(install_cmd, check=True, capture_output=True)
+            # S603: install_cmd is a fixed argv list built from this CDK app's own
+            # declared requirements, not from user/network input; no shell=True.
+            subprocess.run(install_cmd, check=True, capture_output=True)  # noqa: S603
         except (subprocess.CalledProcessError, FileNotFoundError):
             return False
 

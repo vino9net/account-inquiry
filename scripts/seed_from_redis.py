@@ -77,7 +77,8 @@ def _stack_table_name(stack_name: str, region: str) -> str:
         return outputs[_TABLE_OUTPUT_KEY]
     except KeyError:
         raise SystemExit(
-            f"stack {stack_name!r} has no output {_TABLE_OUTPUT_KEY!r} (has: {sorted(outputs)})"
+            f"stack {stack_name!r} has no output {_TABLE_OUTPUT_KEY!r} "
+            f"(has: {sorted(outputs)})"
         ) from None
 
 
@@ -224,7 +225,9 @@ def main() -> int:
         help="CloudFormation stack to resolve the DynamoDB table name from "
         "(default: %(default)s)",
     )
-    parser.add_argument("--region", default="us-west-2", help="AWS region (default: %(default)s)")
+    parser.add_argument(
+        "--region", default="us-west-2", help="AWS region (default: %(default)s)"
+    )
     parser.add_argument(
         "--table-name", help="skip the CloudFormation lookup, write directly to this table"
     )
@@ -283,9 +286,10 @@ def main() -> int:
     # stall before any progress at all, then a sustained ~200-370 items/s (hours for the
     # full table), consistent with 16 threads contending for 10 connections rather than
     # the scan/delete calls themselves being slow.
-    table = boto3.resource(
-        "dynamodb", region_name=args.region, config=Config(max_pool_connections=_WIPE_PARALLELISM)
-    ).Table(table_name)
+    pool_config = Config(max_pool_connections=_WIPE_PARALLELISM)
+    table = boto3.resource("dynamodb", region_name=args.region, config=pool_config).Table(
+        table_name
+    )
 
     if args.wipe_only:
         print("wiping all items ...")

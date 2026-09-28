@@ -7,7 +7,9 @@ from account_inquiry.stack import AccountInquiryStack
 
 def _synth(deploy_env: str = "feature") -> Template:
     app = cdk.App()
-    stack = AccountInquiryStack(app, "TestStack", settings=DeploySettings(deploy_env=deploy_env))
+    stack = AccountInquiryStack(
+        app, "TestStack", settings=DeploySettings(deploy_env=deploy_env)
+    )
     return Template.from_stack(stack)
 
 
