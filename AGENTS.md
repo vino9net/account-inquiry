@@ -252,12 +252,32 @@ aws kinesis delete-stream --stream-name transfers --region <region>
 
 Plain AWS CLI, not a CDK command — `cdk destroy` operates on the whole stack (far too
 broad a blast radius just to drop one idle stream) and wouldn't touch it anyway under
-`RemovalPolicy.RETAIN`. This does leave the stack's CloudFormation state pointing at a
-resource that no longer exists; the next `cdk deploy` (e.g. the next push to `main`)
-finds it missing and recreates it fresh from the template rather than restoring the
-deleted one — don't try to hand-craft an equivalent `aws kinesis create-stream` to get
-it back, since CLI-created streams won't pick up whatever CDK-managed settings
-(encryption, tags) the template applies automatically on create.
+`RemovalPolicy.RETAIN`.
+
+**A plain `cdk deploy` after that will *not* bring it back**, even though the stack's
+CloudFormation state now points at a resource that no longer exists — verified directly
+against this stack with `cdk diff`: with an unchanged template, the stream doesn't appear
+in the diff at all. CloudFormation only acts on resources when the *template* changes; it
+never proactively checks whether physical resources still exist. A previous version of
+this note claimed the opposite (that the next deploy "finds it missing and recreates it
+fresh") — that was wrong, unverified, and got corrected only after banking-benchmarks hit
+it for real during a teardown.
+
+What *does* work: a full `cdk destroy` of the whole stack followed by `cdk deploy`. Since
+`destroy` forgets the stack's CloudFormation state entirely, the next `deploy` starts from
+nothing and genuinely recreates the stream — this is what banking-benchmarks'
+`AGENTS.md` ("Tearing down between runs") now uses as the standard teardown/ramp-up
+cycle for exactly this reason. The tradeoff: `AccountsTable` is *also*
+`RemovalPolicy.RETAIN` and has no fixed name, so every such cycle permanently orphans the
+previous table and creates a new one on the next deploy. Harmless for cost (DynamoDB
+storage is free under 25GB/month; this table has never exceeded ~1GB) but real sprawl —
+accepted as the price of not hand-rolling stream/table recovery. If avoiding table sprawl
+ever matters more than avoiding one manual command, handle the stream in isolation (the
+`aws kinesis delete-stream` above, without a full stack destroy) instead.
+
+Don't hand-craft an equivalent `aws kinesis create-stream` to bring the stream back
+outside of `cdk deploy` either way — CLI-created streams won't pick up whatever
+CDK-managed settings (encryption, tags) the template applies automatically on create.
 
 ## Bundling
 
