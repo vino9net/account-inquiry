@@ -21,9 +21,11 @@ already there instead (existing transaction history is left alone either way whe
 --no-wipe is set).
 
 Pass --wipe-only to empty the table and stop — no Redis connection is made and nothing
-is written back. This is for tearing a benchmark run down to save cost (DynamoDB
-on-demand billing means an empty table costs nothing to leave around) when Redis itself
-is about to be gone too (e.g. the VM it runs on is being terminated right after).
+is written back, for whenever you want the table emptied without immediately reseeding
+it (e.g. no Redis reachable right now). Note: DynamoDB on-demand storage is free
+regardless of item count, so this is about getting a clean, empty table on purpose, not
+about saving money — banking-benchmarks' teardown runbook deliberately leaves this table
+alone rather than wiping it, since it isn't the cost problem there (Kinesis is).
 
 Examples:
     # staging, default Redis (redis://localhost:6379 - e.g. after `kubectl port-forward`)
@@ -31,7 +33,7 @@ Examples:
 
     uv run python scripts/seed_from_redis.py --redis-url redis://localhost:6380 --yes
 
-    # tearing down: empty the table, don't reseed (no Redis needed for this one)
+    # empty the table on its own, don't reseed (no Redis needed for this one)
     uv run python scripts/seed_from_redis.py --stack-name AccountInquiryStack-staging \\
         --wipe-only --yes
 
@@ -48,14 +50,23 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, wait
 from decimal import Decimal
 from typing import Any
 
 import boto3
 import redis
+from botocore.config import Config
 
 _TABLE_OUTPUT_KEY = "AccountsTableName"
+# A single-threaded scan-then-batch-delete of a multi-million-item table took tens of
+# minutes in practice (each BatchWriteItem call is a real network round trip, ~25 items
+# at a time) — found slow enough during a real teardown to be worth parallelizing.
+# DynamoDB's own Scan API is what makes this safe: Segment/TotalSegments hands each
+# worker a disjoint slice of the table, so there's no overlap or coordination needed.
+_WIPE_PARALLELISM = 16
 
 
 def _stack_table_name(stack_name: str, region: str) -> str:
@@ -95,22 +106,65 @@ def _read_redis_accounts(redis_url: str) -> list[dict[str, Any]]:
     return accounts
 
 
-def _wipe_table(table) -> int:
-    """Deletes every item in the table (both ACC_ and TRX_ items) — a full reset, not
-    just the account rows this script is about to rewrite, so stale transaction history
-    from a prior seed generation never lingers against new balances."""
+def _wipe_segment(
+    table, segment: int, total_segments: int, progress: list[int], lock: threading.Lock
+) -> int:
+    """Scans and deletes table's `segment`-th slice of `total_segments` — DynamoDB
+    guarantees segments partition the table with no overlap, so N of these can run
+    concurrently against the same table with no coordination between them.
+
+    `progress`/`lock` are a shared counter the caller polls to print a live rate —
+    without one, a multi-million-item wipe gives no sign of life for minutes at a time,
+    indistinguishable from having hung."""
     deleted = 0
-    scan_kwargs: dict[str, Any] = {"ProjectionExpression": "id, sid"}
+    scan_kwargs: dict[str, Any] = {
+        "ProjectionExpression": "id, sid",
+        "Segment": segment,
+        "TotalSegments": total_segments,
+    }
     with table.batch_writer() as batch:
         while True:
             page = table.scan(**scan_kwargs)
             for item in page["Items"]:
                 batch.delete_item(Key={"id": item["id"], "sid": item["sid"]})
                 deleted += 1
+            if page["Items"]:
+                with lock:
+                    progress[0] += len(page["Items"])
             if "LastEvaluatedKey" not in page:
                 break
             scan_kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
     return deleted
+
+
+def _wipe_table(table, parallelism: int = _WIPE_PARALLELISM) -> int:
+    """Deletes every item in the table (both ACC_ and TRX_ items) — a full reset, not
+    just the account rows this script is about to rewrite, so stale transaction history
+    from a prior seed generation never lingers against new balances.
+
+    `table`'s underlying client is safe to share across threads (boto3 clients are
+    documented thread-safe for making calls); each thread gets its own `batch_writer()`
+    with its own internal buffer, so no state is shared between workers either."""
+    progress = [0]
+    lock = threading.Lock()
+    start = time.monotonic()
+    with ThreadPoolExecutor(max_workers=parallelism) as pool:
+        pending = {
+            pool.submit(_wipe_segment, table, segment, parallelism, progress, lock)
+            for segment in range(parallelism)
+        }
+        futures = set(pending)
+        while pending:
+            done, pending = wait(pending, timeout=5)
+            elapsed = time.monotonic() - start
+            with lock:
+                n = progress[0]
+            rate = n / elapsed if elapsed > 0 else 0.0
+            print(
+                f"  ... {n} items deleted so far ({rate:.0f}/s, {elapsed:.0f}s elapsed)",
+                file=sys.stderr,
+            )
+        return sum(f.result() for f in futures)
 
 
 def _write_accounts(table, accounts: list[dict[str, Any]]) -> int:
@@ -224,7 +278,14 @@ def main() -> int:
         print("aborted.")
         return 1
 
-    table = boto3.resource("dynamodb", region_name=args.region).Table(table_name)
+    # Default max_pool_connections (10) is well under _WIPE_PARALLELISM (16) — found
+    # this the hard way: a real wipe against a multi-million-item table showed a ~75s
+    # stall before any progress at all, then a sustained ~200-370 items/s (hours for the
+    # full table), consistent with 16 threads contending for 10 connections rather than
+    # the scan/delete calls themselves being slow.
+    table = boto3.resource(
+        "dynamodb", region_name=args.region, config=Config(max_pool_connections=_WIPE_PARALLELISM)
+    ).Table(table_name)
 
     if args.wipe_only:
         print("wiping all items ...")
