@@ -193,7 +193,13 @@ class AccountInquiryStack(Stack):
                 bisect_batch_on_error=True,
                 report_batch_item_failures=True,
                 on_failure=dlq_destination,
-                parallelization_factor=1,  # raise once measured; see ARCH_DESIGN.md D7 lesson
+                # 10 is AWS's hard per-shard ceiling for this setting, not a tunable-higher
+                # value. Measured: 1 shard x parallelization_factor=1 processed only
+                # ~38-58 tps against 100 tps of input, with delay climbing unbounded — see
+                # banking-benchmarks' dynamodb-ingestion benchmark. The Kinesis partition
+                # key is the transfer's ULID (core-sim relay.py), high-cardinality with no
+                # repeats, so parallel workers split cleanly with no hot-key contention.
+                parallelization_factor=10,
             )
         )
 
